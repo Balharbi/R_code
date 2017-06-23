@@ -1,0 +1,61 @@
+##How to use the liftover tool to update genomic info
+
+#Step 1: extract and liftover rs numbers
+
+ awk '{print $2;}' decode_forward_QCed.map | sed 's/rs//g' > decode_forward_QCed.rs #Must remove rs prefix from snp name
+ python LiftRsNumber.py  decode_forward_QCed.rs > decode_forward_QCed.rs_lifted 
+#add back in the rs letters to the lift over snps. The other ones need no fixing because they will be ignored from this file
+ awk '{if ($1 == "lifted") print $1, "rs"$2; else print $1,$2}'  decode_forward_QCed.rs_lifted > temp1.txt 
+ paste <(awk '{print $2;}' decode_forward_QCed.map)  temp1.txt > temp2.txt
+#Make a list of all rs to rename for plink
+ awk '{if($2 == "lifted") print $1,$3}' temp2.txt > rs_rename.rslist 
+#Give the revised list of all SNP names. We find positions for these 
+ awk '{if($2 != "lifted") print $1; else print $3}' temp2.txt > new_rs_names.snplist
+
+#Step 2: lookup positions
+
+#List all positions
+ awk '{print $3,$5}' hg19snp142allsnps > hg19snp142allsnps_positions
+#sort the list of positions
+ LC_ALL=C sort -k 2,2b hg19snp142allsnps_positions > hg19snp142allsnps_positions.sorted
+#Sort the SNPlist
+ LC_ALL=C sort -k1,1b new_rs_names.snplist > new_rs_names.snplist.sorted
+
+#Get the overlapping set
+ join -1 1 -2 2 new_rs_names.snplist.sorted hg19snp142allsnps_positions.sorted > new_rs_names.locations
+
+#Check if some snps had more than 1 match
+ wc -l new_rs_names.locations
+ wc -l new_rs_names.snplist
+
+#Find names of SNPs with extra matches
+ awk '{print $1}' new_rs_names.locations | sort -k1 | uniq -c > dupcheck.txt
+ awk '{if ($1 > 1) print}' dupcheck.txt > dups.txt
+
+#Give position info on a particular one of these markers
+ awk '{if ($1 == "rs1003581") print}' new_rs_names.locations
+ awk '{if ($5 == "rs1003581") print}' hg19snp142allsnps > rs1003581_hg19snp142allsnps
+#seesms to have to do with alternative haplotypes/sequence patches (http://blog.openhelix.eu/?p=8453)
+
+
+#Just remove the markers with duplicate positions
+ awk '{print $2}'  dups.txt > dups.snplist
+
+ sort -u -k1,1b new_rs_names.locations > new_rs_names.locations_uniq
+
+
+#Step 3: update the data
+#update the rs names of the renameable markers
+ plink19beta2i --bfile  decode_forward_QCed --update-name rs_rename.rslist --make-bed  --out decode_forward_QCed_rsrename
+ wc -l   decode_forward_QCed_rsrename.bim
+ awk '{print $2}'  decode_forward_QCed_rsrename.bim | sort | uniq -c | awk '{if($1 > 1) print $2}'   > merged_markers.snplist
+
+ #rs12643283 and rs8189044 duplicate. Must have been merged into another rs. I tell plink to remove the pre-update name version of these markers
+ #grep -E "rs12643283|rs8189044" rs_rename.rslist | awk '{print $1}' > remove_merged.snplist
+ plink19beta2i --bfile  decode_forward_QCed --exclude remove_merged.snplist  --make-bed  --out temp1
+ plink19beta2i --bfile  temp1 --update-name rs_rename.rslist  --make-bed  --out temp2
+
+#Remove the markers with duplicate positions. Update the positiosn of the rest
+ plink19beta2i --bfile  temp2 --exclude dups.snplist --update-map  new_rs_names.locations_uniq --make-bed  --out decode_forward_QCed_rsrename 
+
+
